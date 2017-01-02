@@ -1,0 +1,194 @@
+/* REXX */
+/* trace ?r */
+ftpserver.1 = ftp.gwdg.de
+ftpserver.2 = anorien.csc.warwick.ac.uk
+ftpserver.3 = mirrors.rit.edu
+ftpserver.4 = ftp.jaist.ac.jp
+ftpserver.0 = 4
+servernr = 2
+scr.1 = '.msbcf % % QUIT'
+scr.2 = '    PF3=QUIT'
+i = 2
+DO j = 1 TO ftpserver.0
+  i = i + 1
+  scr.i = '.c'
+  i = i + 1
+  scr.i = '#1&inp 'ftpserver.j
+END
+scr.0 = i
+'IOS3270 (STEM scr.'
+IF rc <> 0 THEN EXIT rc
+
+PARSE VAR IOSC 1 val 3 .
+servernr = val - 1
+
+call prepare_tempdisk
+distrobase.0 = NULL
+vmlink tcpmaint 592
+CALL get_distros
+scr.1 = '.msbcf % % QUIT'
+scr.2 = '    PF3=QUIT  Press ENTER to select'
+i = 2
+DO j = 1 TO distrobase.0
+  i = i + 1
+  scr.i = '.c'
+  i = i + 1
+  scr.i = '#1&inp 'distrobase.j
+END
+scr.0 = i
+'IOS3270 ( STEM scr.'
+if rc <> 0 then exit rc
+
+PARSE VAR IOSC 1 val 3 .
+val = val - 1
+CALL boot_ftp distrobase.val
+EXIT
+
+get_distros:
+'vmlink tcpmaint 592'
+IF ftpserver.servernr = "FTP.GWDG.DE" THEN DO
+  /* provide user and password together in one line
+     as per z/VM V5R4.0 TCP/IP User's Guide
+     "Providing FTP Subcommand Input"
+   */
+  QUEUE 'ftp ftp'
+  QUEUE 'passive'
+  QUEUE 'ls pub/opensuse/ports/zsystems/tumbleweed/repo/oss/suse.ins'
+  QUEUE 'quit'
+  'PIPE cms ftp 'ftpserver.servernr' | STEM msg.'
+END
+ELSE IF ftpserver.servernr = "ANORIEN.CSC.WARWICK.AC.UK" THEN DO
+  P1 = "download.opensuse.org/ports/zsystems"
+  P2 = "/tumbleweed/repo/oss/suse.ins"
+  QUEUE 'ftp ftp'
+  QUEUE 'passive'
+  QUEUE 'ls '||P1||P2
+  QUEUE 'quit'
+  'PIPE cms ftp 'ftpserver.servernr' | STEM msg.'
+END
+ELSE IF ftpserver.servernr = "MIRRORS.RIT.EDU" THEN DO
+  QUEUE 'ftp ftp'
+  QUEUE 'passive'
+  QUEUE 'ls opensuse/ports/zsystems/tumbleweed/repo/oss/suse.ins'
+  QUEUE 'quit'
+  'PIPE cms ftp 'ftpserver.servernr' | STEM msg.'
+END
+ELSE IF ftpserver.servernr = "FTP.JAIST.AC.JP" THEN DO
+/* trace ?r */
+  P1 = "pub/Linux/openSUSE/ports/zsystems"
+  P2 = "/tumbleweed/repo/oss/suse.ins"
+  QUEUE 'ftp ftp'
+  QUEUE 'passive'
+  QUEUE 'ls '||P1||P2
+  QUEUE 'quit'
+  'PIPE cms ftp 'ftpserver.servernr' | STEM msg.'
+END
+m = 0
+SAY msg.0
+/* trace ?r */
+DO n = 1 to msg.0
+  CALL get_ins msg.n
+  IF RESULT = 1 THEN DO
+    m = m + 1
+    distrobase.m = "ftp://"ftpserver.servernr"/"msg.n
+  END
+END
+distrobase.0 = m
+DO n = 1 TO distrobase.0
+  SAY distrobase.n
+END
+return
+
+get_ins:
+  IF ARG(1) = '' THEN return
+  val = ARG(1)
+  PARSE VALUE val WITH . 'NLST' x
+  IF x <> "" THEN return
+  DO 8
+    PARSE VALUE val WITH path '/' rest
+    IF val = path THEN DO
+      RETURN 0
+    END
+    IF rest = "suse.ins" THEN DO
+      RETURN 1
+    END
+    val = rest
+  END
+return
+
+boot_ftp:
+call DownloadBootFiles ARG(1)
+call PunchFiles
+ipl 00c clear
+exit
+
+prepare_tempdisk:
+'set vdisk syslim infinite'
+'set vdisk userlim infinite'
+'detach ffff'
+'define vfb-512 as ffff blk 200000'
+queue '1'
+queue 'tmpdsk'
+'format ffff t'
+return
+
+DownloadBootFiles:
+SAY "Download Boot Files:" ARG(1)
+PARSE VALUE ARG(1) WITH 'ftp://' server '/' file
+QUEUE 'ftp ftp'
+QUEUE 'passive'
+QUEUE 'get' file "suse.ins.t"
+QUEUE 'quit'
+ftp server
+PARSE VALUE file WITH bas "suse.ins"
+'PIPE < SUSE INS T | STEM ins.'
+kern = ""
+ird  = ""
+parm = ""
+DO n = 1 TO ins.0
+  PARSE VALUE ins.n WITH t ".ikr " .
+  IF t <> ins.n THEN DO
+    kern = bas""t".ikr"
+    t = ""
+  END
+  PARSE VALUE ins.n WITH " boot" t "linux" .
+  IF t <> ins.n THEN DO
+    kern = bas"boot"t"/s390x/linux"
+    t = ""
+  END
+  PARSE VALUE ins.n WITH " boot" t "initrd" .
+  IF t <> ins.n THEN DO
+
+    ird = bas"boot"t"/s390x/initrd"
+    t = ""
+  END
+  PARSE VALUE ins.n WITH " boot" t "parmfile" .
+  IF t <> ins.n THEN DO
+    parm = bas"boot"t"/s390x/parmfile"
+    t = ""
+  END
+END
+SAY "Parmfile: " parm
+SAY "Kernel:   " kern
+SAY "Initrd:   " ird
+QUEUE 'ftp ftp'
+QUEUE 'passive'
+QUEUE 'get' parm 'ftpboot.parm.t'
+QUEUE 'bin'
+QUEUE 'get' kern 'ftpboot.kern.t'
+QUEUE 'get' ird  'ftpboot.initrd.t'
+QUEUE 'quit'
+ftp server
+'PIPE < FTPBOOT KERN T | fblock 80 00 | > FTPBOOT KERN T'
+'PIPE < FTPBOOT INITRD T | fblock 80 00 | > FTPBOOT INITRD T'
+return
+
+PunchFiles:
+'spool punch *'
+'close reader'
+'purge reader all'
+'punch ftpboot kern t (noh'
+'X FTPBOOT PARM T'
+'punch ftpboot parm t (noh'
+'punch ftpboot initrd t (noh'
+return
